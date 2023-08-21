@@ -17,7 +17,9 @@ class Command(BaseCommand):
                 self.check(databases=["default"])
                 db_up = True
             except (Psycopg2Error, OperationalError):
-                self.stdout.write("Ddatabase unavailable, waiting 1s to retry...")
+                self.stdout.write(
+                    "Ddatabase unavailable, waiting 1s to retry..."
+                )
                 time.sleep(1)
 
         self.stdout.write(self.style.SUCCESS("dabase available !"))
