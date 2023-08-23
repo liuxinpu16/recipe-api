@@ -4,6 +4,10 @@ from django.contrib.auth import get_user_model
 from core import models
 
 
+def create_user(email='test@example.com', password='password'):
+    return get_user_model().objects.create_user(email, password)
+
+
 class ModelTests(TestCase):
     def test_create_user_with_email_successful(self):
         email = "test@example.com"
@@ -15,11 +19,12 @@ class ModelTests(TestCase):
         self.assertTrue(user.check_password(password))
 
     def test_new_user_email_normailized(self):
-        sample_emails = [["test1@EXAMPLE.com", "test1@example.com"],
-                         ['Test2@example.com', 'Test2@example.com'],
-                         ['TEST3@EXAMPLE.COM', 'TEST3@example.com'],
-                         ['test4@example.COM', 'test4@example.com']
-                         ]
+        sample_emails = [
+            ["test1@EXAMPLE.com", "test1@example.com"],
+            ['Test2@example.com', 'Test2@example.com'],
+            ['TEST3@EXAMPLE.COM', 'TEST3@example.com'],
+            ['test4@example.COM', 'test4@example.com']
+        ]
         for email, expected in sample_emails:
             user = get_user_model().objects.create_user(email, 'sample123')
             self.assertEqual(user.email, expected)
@@ -50,3 +55,16 @@ class ModelTests(TestCase):
         )
 
         self.assertEqual(str(recipe), recipe.title)
+
+    def test_create_tag(self):
+        user = create_user()
+        tag = models.Tag.objects.create(user=user, name='Tage1')
+        self.assertEqual(str(tag), tag.name)
+
+    def test_create_ingredient(self):
+        user = create_user()
+        ingriedient = models.Ingredient.objects.create(
+            user=user,
+            name='Ingriedient1'
+        )
+        self.assertEqual(str(ingriedient), ingriedient.name)
