@@ -1,4 +1,7 @@
 from decimal import Decimal
+import tempfile
+import os
+from PIL import Image
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -23,6 +26,10 @@ RECIPE_URL = reverse('recipe:recipe-list')
 
 def detail_url(recipe_id):
     return reverse('recipe:recipe-detail', args=[recipe_id])
+
+
+def image_upload_url(recipe_id):
+    return reverse('recipe:recipe-upload-image', args=[recipe_id])
 
 
 def create_recipe(user, **params):
@@ -282,7 +289,7 @@ class PrivateRecipeAPITests(TestCase):
         recipe = recipes[0]
         self.assertEqual(recipe.ingredients.count(), 2)
         for ingredient in payload['ingredients']:
-            exists = recipe.tags.filter(
+            exists = recipe.ingredients.filter(
                 name=ingredient['name'], user=self.user).exists()
             self.assertTrue(exists)
 
@@ -292,7 +299,7 @@ class PrivateRecipeAPITests(TestCase):
             'title': 'New Recipe title',
             'time_minutes': 10,
             'price': Decimal('2.5'),
-            'tags': [{'name': 'Lemon'}, {'name': 'Potato'}],
+            'ingredients': [{'name': 'Lemon'}, {'name': 'Potato'}],
         }
 
         res = self.client.post(RECIPE_URL, payload, format='json')
@@ -301,11 +308,120 @@ class PrivateRecipeAPITests(TestCase):
         recipes = Recipe.objects.filter(user=self.user)
         self.assertEqual(recipes.count(), 1)
         recipe = recipes[0]
-        self.assertEqual(recipe.tags.count(), 2)
+        self.assertEqual(recipe.ingredients.count(), 2)
         self.assertIn(ingredient, recipe.ingredients.all())
         for ingredient in payload['ingredients']:
-            exists = recipe.tags.filter(
+            exists = recipe.ingredients.filter(
                 name=ingredient['name'],
-                user=self.use
+                user=self.user
             ).exists()
             self.assertTrue(exists)
+
+    def test_create_ingredient_on_update(self):
+        recipe = create_recipe(user=self.user)
+        url = detail_url(recipe.id)
+        payload = {'ingredients': [{'name': 'Lemon'}]}
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        new_ingredient = Ingredient.objects.get(
+            user=self.user, name='Lemon')
+        self.assertIn(new_ingredient, recipe.ingredients.all())
+
+    def test_update_recipe_assgin_ingredient(self):
+        ingredient1 = Ingredient.objects.create(user=self.user, name='Lemon')
+        recipe = create_recipe(user=self.user)
+        recipe.ingredients.add(ingredient1)
+
+        ingredient2 = Ingredient.objects.create(user=self.user, name='Chili')
+        payload = {'ingredients': [{'name': 'Chili'}]}
+        url = detail_url(recipe.id)
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(ingredient2, recipe.ingredients.all())
+        self.assertNotIn(ingredient1, recipe.ingredients.all())
+
+    def test_clear_recipe_ingredients(self):
+        ingredient1 = Ingredient.objects.create(user=self.user, name='Lemon')
+        recipe = create_recipe(user=self.user)
+        recipe.ingredients.add(ingredient1)
+
+        payload = {'ingredients': []}
+        url = detail_url(recipe.id)
+        res = self.client.patch(url, payload, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        recipe.refresh_from_db()
+        self.assertEqual(recipe.ingredients.count(), 0)
+
+    def test_filter_by_tags(self):
+        recipe1 = create_recipe(user=self.user, title='R1')
+        recipe2 = create_recipe(user=self.user, title='R2')
+        recipe3 = create_recipe(user=self.user, title='R3')
+
+        tag1 = Tag.objects.create(user=self.user, name='t1')
+        tag2 = Tag.objects.create(user=self.user, name='t2')
+        recipe1.tags.add(tag1)
+        recipe2.tags.add(tag2)
+
+        params = {'tags': f'{tag1.id},{tag2.id}'}
+
+        s1 = RecipeSerializer(recipe1)
+        s2 = RecipeSerializer(recipe2)
+        s3 = RecipeSerializer(recipe3)
+        res = self.client.get(RECIPE_URL, params)
+        self.assertIn(s1.data, res.data)
+        self.assertIn(s2.data, res.data)
+        self.assertNotIn(s3.data, res.data)
+
+    def test_filter_by_ingredients(self):
+        recipe1 = create_recipe(user=self.user, title='R1')
+        recipe2 = create_recipe(user=self.user, title='R2')
+        in1 = Ingredient.objects.create(user=self.user, name='in1')
+        in2 = Ingredient.objects.create(user=self.user, name='in2')
+        recipe1.ingredients.add(in1)
+        recipe2.ingredients.add(in2)
+        recipe3 = create_recipe(user=self.user, title='R3')
+
+        params = {'ingredients': f'{in1.id},{in2.id}'}
+        s1 = RecipeSerializer(recipe1)
+        s2 = RecipeSerializer(recipe2)
+        s3 = RecipeSerializer(recipe3)
+        res = self.client.get(RECIPE_URL, params)
+        self.assertIn(s1.data, res.data)
+        self.assertIn(s2.data, res.data)
+        self.assertNotIn(s3.data, res.data)
+
+
+class ImageUploadTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = create_user(
+            email='test@example.com', password='testpass123'
+        )
+        self.client.force_authenticate(self.user)
+        self.recipe = create_recipe(user=self.user)
+
+    def tearDown(self):
+        self.recipe.image.delete()
+
+    def test_upload_image(self):
+        url = image_upload_url(self.recipe.id)
+        with tempfile.NamedTemporaryFile(suffix='.jpg') as image_file:
+            img = Image.new('RGB', (10, 10))
+            img.save(image_file, format='JPEG')
+            image_file.seek(0)
+            payload = {'image': image_file}
+            res = self.client.post(url, payload, format='multipart')
+
+        self.recipe.refresh_from_db()
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('image', res.data)
+        self.assertTrue(os.path.exists(self.recipe.image.path))
+
+    def test_upload_image_bad_request(self):
+        url = image_upload_url(self.recipe.id)
+        payload = {'image': 'image_file'}
+        res = self.client.post(url, payload=payload, format='multipart')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
